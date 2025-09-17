@@ -1,0 +1,8 @@
+pip install -r requirements.txt
+PyQt5
+gmsh
+numpy
+scipy
+meshio
+pyvista
+python-docx

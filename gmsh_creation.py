@@ -73,6 +73,11 @@ class GmshGenerator:
             # 5. 메쉬 옵션 설정 및 생성
             gmsh.option.setNumber("Mesh.MeshSizeMax", mesh_size)
             gmsh.option.setNumber("Mesh.Algorithm3D", 1)
+            gmsh.option.setNumber("Geometry.Points", 1)      # 점 가시성 켜기
+            gmsh.option.setNumber("Geometry.Curves", 1)      # 선 가시성 켜기
+            gmsh.option.setNumber("Geometry.Surfaces", 1)    # 면 가시성 켜기
+            gmsh.option.setNumber("Geometry.Volumes", 1)     # 볼륨 가시성 켜기
+            gmsh.option.setNumber("Mesh.SurfaceFaces", 1)    # 2D 메쉬 면 보기
             
             # === [ 중요 수정 사항 ] ===
             # 기존 gmsh.model.mesh.setOrder(2) 대신 전역 옵션을 사용하여 2차 요소를 강제합니다.

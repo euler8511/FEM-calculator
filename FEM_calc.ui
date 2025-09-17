@@ -45,12 +45,22 @@
    </item>
    <item>
     <property name="text">
-     <string>Static Analysis with GMSH</string>
+     <string>Beam Analysis(Timoshenko beam) with GMSH</string>
     </property>
    </item>
    <item>
     <property name="text">
-     <string>Modal Analysis with GMSH</string>
+     <string>Shaft modal with GMSH</string>
+    </property>
+   </item>
+   <item>
+    <property name="text">
+     <string>2D Static Analysis with GMSH</string>
+    </property>
+   </item>
+   <item>
+    <property name="text">
+     <string>Pipe Thermal Stress Analysis with GMSH</string>
     </property>
    </item>
   </widget>

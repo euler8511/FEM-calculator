@@ -1,17 +1,24 @@
+# FEM_main.py
+
 import sys
 import gmsh
 from PyQt5 import uic
 from PyQt5.QtWidgets import QApplication, QDialog, QWidget, QVBoxLayout, QLabel, QMessageBox
 from PyQt5.QtCore import Qt, QStringListModel
 from gmsh_creation import GmshGenerator
+# 'ReactionSolver'를 Canvas의 파일 이름인 'force_analysis'로 수정했습니다.
 from ReactionSolver import ForceAnalysis
+import tkinter as tk
+from tkinter import filedialog
+import meshio
+import numpy as np
 
 # --- UI File Loading ---
 # 스크립트와 동일한 디렉토리에 .ui 파일이 있는지 확인합니다.
 try:
     Ui_Dialog, QtBaseClass = uic.loadUiType('FEM_calc.ui')
     Ui_Dialog1, QtBaseClass1 = uic.loadUiType('reaction_force.ui')
-    Ui_Dialog2, QtBaseClass2 = uic.loadUiType('static.ui')
+    Ui_Dialog2, QtBaseClass2 = uic.loadUiType('Beam_analysis.ui')
     Ui_Dialog3, QtBaseClass3 = uic.loadUiType('modal.ui')
 except FileNotFoundError as e:
     # 필수 UI 파일이 없을 경우, 사용자에게 알리고 프로그램을 종료합니다.
@@ -103,23 +110,42 @@ class ReactionForceCalculatorWindow(QDialog, Ui_Dialog1):
         self.list_model = QStringListModel()
         self.listView.setModel(self.list_model)
 
-        # 데이터 저장소
-        self.system_data = {}
-        self.force_data_list = []
-        self.fix_data_list = []  # [NEW] 고정 조건을 저장할 리스트
-        self.youngs_modul = None
-        self.poisson_ratio = None
+        # --- [MODIFIED] 이미지에 명시된 데이터로 사전 초기화 ---
+        self.system_data = {
+            'x': 0.8, 'y': 0.2, 'z': 0.8, 'mesh': 0.05
+        }
+        self.force_data_list = [
+            {'force_x': 0.0, 'force_y': 3000.0, 'force_z': 0.0,
+             'force_x_pstn': 0.4, 'force_y_pstn': 0.2, 'force_z_pstn': 0.4}
+        ]
+        self.fix_data_list = [
+            {'pos_x': 0.0, 'pos_y': 0.0, 'pos_z': 0.0, 'fix_x': 0, 'fix_y': 0, 'fix_z': 0},
+            {'pos_x': 0.0, 'pos_y': 0.0, 'pos_z': 0.8, 'fix_x': 0, 'fix_y': 0, 'fix_z': 0},
+            {'pos_x': 0.8, 'pos_y': 0.0, 'pos_z': 0.0, 'fix_x': 0, 'fix_y': 0, 'fix_z': 0},
+            {'pos_x': 0.8, 'pos_y': 0.0, 'pos_z': 0.8, 'fix_x': 0, 'fix_y': 0, 'fix_z': 0},
+        ]
+        self.youngs_modul = 2e11
+        self.poisson_ratio = 0.3
         self.mesh_file = "generated_mesh.msh"
+        self.analysis_instance = None
+
+        # UI 필드에 사전 입력된 값 표시
+        self.young_input.setText(str(self.youngs_modul))
+        self.poisson_input.setText(str(self.poisson_ratio))
+        
+        # 리스트 뷰 새로고침
+        self._refresh_list_view()
+        # ---------------------------------------------------------
 
         # 시그널과 슬롯 연결
         self.system_info_button.clicked.connect(self.show_system_info_dialog)
         self.force_add_button.clicked.connect(self.show_force_add_dialog)
-        self.fix_add_button.clicked.connect(self.show_fix_add_dialog) # [MODIFIED]
+        self.fix_add_button.clicked.connect(self.show_fix_add_dialog)
         self.edit_button.clicked.connect(self.show_edit_dialog)
         self.remove_button.clicked.connect(self.remove_selected_item)
         self.mesh_update_button.clicked.connect(self.show_mesh_update_dialog)
-        self.run_button.clicked.connect(self.run_analysis) # [MODIFIED]
-        self.plot_button.clicked.connect(self.plot_results) # [MODIFIED]
+        self.run_button.clicked.connect(self.run_analysis)
+        self.plot_button.clicked.connect(self.plot_results)
         
         
     def _refresh_list_view(self):
@@ -326,24 +352,19 @@ class ReactionForceCalculatorWindow(QDialog, Ui_Dialog1):
 
 
     def run_analysis(self):
-        # [NEW] This function now triggers the FEM analysis
+        # [MODIFIED] 다중 힘을 처리하도록 수정
         print("--- Starting FEM Analysis ---")
         try:
-            # 1. Check for required data
+            # 1. 필수 데이터 확인
             if not all([self.youngs_modul, self.poisson_ratio, self.force_data_list]):
-                QMessageBox.warning(self, "Data Missing", "해석을 실행하려면 재료 물성치와 힘 조건이 필요합니다.")
+                QMessageBox.warning(self, "Data Missing", "해석을 실행하려면 재료 물성치와 하나 이상의 힘 조건이 필요합니다.")
                 return
 
-            # Note: The analysis code is simplified to handle one force condition.
-            if len(self.force_data_list) > 1:
-                QMessageBox.information(self, "Simplification", "현재 해석은 첫 번째 힘 조건만 사용합니다.")
-
-            force_info = self.force_data_list[0]
-
-            # 2. Instantiate and run analysis
+            # 2. ForceAnalysis 인스턴스 생성 및 실행
+            # force_data_list 전체를 전달합니다.
             self.analysis_instance = ForceAnalysis(
                 msh_file=self.mesh_file,
-                force_data=force_info,
+                force_data=self.force_data_list,  # [CHANGED]
                 fix_data=self.fix_data_list,
                 E=self.youngs_modul,
                 v=self.poisson_ratio
@@ -386,18 +407,67 @@ class CustomDialog(QDialog):
         self.setLayout(layout)
         
         
-class StaticAnalysisWindow(QDialog, Ui_Dialog2):
+class BeamAnalysisWindow(QDialog, Ui_Dialog2):
     """'Static Analysis' 창 (플레이스홀더)."""
     def __init__(self):
         super().__init__()
         self.setupUi(self)
         
+        self.list_model = QStringListModel()
+        self.listView.setModel(self.list_model)
         
-class ModalAnalysisWindow(QDialog, Ui_Dialog3):
+        self.mesh_sel_btn.clicked.connect(self.mesh_load)
+
+
+    def mesh_load(self):
+        # ========== [1] 파일 로드 ==========
+        root = tk.Tk()
+        root.withdraw()
+        mesh_path = filedialog.askopenfilename(
+            title="Select Gmsh .msh file",
+            filetypes=[("Gmsh mesh", "*.msh")]
+        )
+        if not mesh_path:
+            raise FileNotFoundError("No .msh file selected.")
+
+        self.mesh = meshio.read(mesh_path)
+        self.points = self.mesh.points[:, :2]
+        # ========== [2] Physical group명 추출 ==========      
+        if self.mesh.field_data:
+            # 딕셔너리의 키들을 리스트로 변환하여 반환합니다.
+            physical_group_names = list(self.mesh.field_data.keys())
+            print(physical_group_names)
+        else:
+            print("Physical Group을 찾을 수 없습니다.")
+        
+        # ========== [2] Beam 요소 및 물성 설정 ==========
+        self.beam_cells = np.vstack([c.data for c in self.mesh.cells if c.type in ["line", "line2"]])
+        if not len(self.beam_cells):
+            raise ValueError("No beam elements found.")
+        
+        
+        
+class ShaftAnalysisWindow(QDialog, Ui_Dialog3):
     """'Modal Analysis' 창 (플레이스홀더)."""
     def __init__(self):
         super().__init__()
         self.setupUi(self)
+        
+        
+class Static2DAnalysisWindow(QDialog, Ui_Dialog3):
+    """'Modal Analysis' 창 (플레이스홀더)."""
+    def __init__(self):
+        super().__init__()
+        self.setupUi(self)
+
+
+class PipeThermalAnalysisWindow(QDialog, Ui_Dialog3):
+    """'Modal Analysis' 창 (플레이스홀더)."""
+    def __init__(self):
+        super().__init__()
+        self.setupUi(self)
+        
+        
         
 # --- 메인 선택 대화상자 ---
 
@@ -413,10 +483,14 @@ class SelectionDialog(QDialog, Ui_Dialog):
         selected_option = self.comboBox.currentText()
         if selected_option == "Reaction Force Calculator with GMSH":
             self.new_window = ReactionForceCalculatorWindow()
-        elif selected_option == "Static Analysis with GMSH":
-            self.new_window = StaticAnalysisWindow()
-        elif selected_option == "Modal Analysis with GMSH":
-            self.new_window = ModalAnalysisWindow()
+        elif selected_option == "Beam Analysis(Timoshenko beam) with GMSH":
+            self.new_window = BeamAnalysisWindow()
+        elif selected_option == "Shaft modal with GMSH":
+            self.new_window = ShaftAnalysisWindow()
+        elif selected_option == "2D Static Analysis with GMSH":
+            self.new_window = Static2DAnalysisWindow()
+        elif selected_option == "Pipe Thermal Stress Analysis with GMSH":
+            self.new_window = PipeThermalAnalysisWindow()
 
 # --- 프로그램 실행 ---
 

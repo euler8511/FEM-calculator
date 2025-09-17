@@ -1,3 +1,5 @@
+# ReactionSolver.py
+
 import numpy as np
 import meshio
 import pyvista as pv
@@ -23,7 +25,7 @@ class ForceAnalysis:
         """
         클래스 초기화
         :param msh_file: Gmsh 메쉬 파일 경로 (.msh)
-        :param force_data: 힘의 크기와 위치 정보가 담긴 딕셔너리
+        :param force_data: 힘의 크기와 위치 정보가 담긴 딕셔너리의 리스트
         :param fix_data: 고정할 위치와 자유도 정보가 담긴 리스트
         :param E: 탄성 계수 (Young's Modulus)
         :param v: 푸아송 비 (Poisson's Ratio)
@@ -43,8 +45,11 @@ class ForceAnalysis:
         self.u = None
         self.f = None
         self.reaction_forces = None
-        self.fixed_nodes_info = [] # 고정점 정보 저장을 위한 리스트
-        self.negative_detJ_count = 0 # [NEW] 음수 자코비안 카운터
+        self.fixed_nodes_info = [] 
+        self.negative_detJ_count = 0
+        
+        # [NEW] 플로팅을 위해 적용된 힘의 정보를 저장할 리스트
+        self.applied_forces_info = []
         
         # 메쉬 파일 읽기
         self._read_mesh()
@@ -58,12 +63,10 @@ class ForceAnalysis:
         self.points = self.mesh.points
         self.num_nodes = len(self.points)
         
-        # 3D 체적 요소 (Tetra10) 추출
         self.tetra10_conn = self.mesh.cells_dict.get('tetra10')
         if self.tetra10_conn is None:
             raise ValueError("메쉬 파일에 'tetra10' 요소가 없습니다.")
         
-        # Physical Group에서 노드 인덱스 추출
         self.diri_nodes = self._get_nodes_from_physical_group('Diri_BCs', 'vertex')
         self.neumann_nodes = self._get_nodes_from_physical_group('Neumann_BCs', 'vertex')
 
@@ -89,9 +92,9 @@ class ForceAnalysis:
             [1-self.v, self.v,     self.v,     0,   0,   0],
             [self.v,     1-self.v, self.v,     0,   0,   0],
             [self.v,     self.v,     1-self.v, 0,   0,   0],
-            [0,       0,       0,       C2,  0,   0],
-            [0,       0,       0,       0,   C2,  0],
-            [0,       0,       0,       0,   0,   C2]
+            [0,         0,         0,         C2,  0,   0],
+            [0,         0,         0,         0,   C2,  0],
+            [0,         0,         0,         0,   0,   C2]
         ])
 
     def _shape_funcs_tet10(self, xi, eta, zeta):
@@ -99,11 +102,11 @@ class ForceAnalysis:
         L2, L3, L4 = xi, eta, zeta
         L1 = 1 - xi - eta - zeta
         dN_L = np.array([
-            [4*L1-1, 0,    0,    0   ], [0, 4*L2-1,    0,    0   ],
-            [0,    0, 4*L3-1,    0   ], [0,    0,    0, 4*L4-1 ],
-            [4*L2, 4*L1,    0,    0   ], [0, 4*L3, 4*L2,    0   ],
-            [4*L3, 0, 4*L1,    0   ], [4*L4, 0,    0, 4*L1 ],
-            [0, 4*L4, 0, 4*L2 ], [0,    0, 4*L4, 4*L3 ]
+            [4*L1-1, 0,      0,      0     ], [0, 4*L2-1,      0,      0     ],
+            [0,      0, 4*L3-1,      0     ], [0,      0,      0, 4*L4-1  ],
+            [4*L2, 4*L1,      0,      0     ], [0, 4*L3, 4*L2,      0     ],
+            [4*L3, 0, 4*L1,      0     ], [4*L4, 0,      0, 4*L1  ],
+            [0, 4*L4, 0, 4*L2  ], [0,      0, 4*L4, 4*L3  ]
         ]).T
         dL = np.array([[-1,-1,-1], [1,0,0], [0,1,0], [0,0,1]])
         dN = dL.T @ dN_L
@@ -128,7 +131,7 @@ class ForceAnalysis:
                 J = dN_natural @ el_coords
                 detJ = np.linalg.det(J)
                 if detJ <= 1e-12:
-                    self.negative_detJ_count += 1 # [MODIFIED] 음수 자코비안 카운트
+                    self.negative_detJ_count += 1
                     continue
                 
                 dN_global = np.linalg.inv(J) @ dN_natural
@@ -155,6 +158,7 @@ class ForceAnalysis:
         self.f = np.zeros(total_dof)
         fixed_dofs = []
         self.fixed_nodes_info = []
+        self.applied_forces_info = [] # [MODIFIED] 리스트 초기화
 
         for fix_info in self.fix_data:
             pos = np.array([fix_info['pos_x'], fix_info['pos_y'], fix_info['pos_z']])
@@ -170,12 +174,22 @@ class ForceAnalysis:
         self.fixed_dofs = np.unique(fixed_dofs)
         print(f"   - Fixed {len(self.fixed_dofs)} DOFs.")
 
-        force_vec = [self.force_data['force_x'], self.force_data['force_y'], self.force_data['force_z']]
-        pos = np.array([self.force_data['force_x_pstn'], self.force_data['force_y_pstn'], self.force_data['force_z_pstn']])
-        distances = np.linalg.norm(self.points[self.neumann_nodes] - pos, axis=1)
-        node_idx = self.neumann_nodes[np.argmin(distances)]
-        self.f[3 * node_idx : 3 * node_idx + 3] = force_vec
-        print(f"   - Applied force {force_vec} N to node {node_idx}.")
+        print(f"   - Applying {len(self.force_data)} force(s)...")
+        for force_item in self.force_data:
+            force_vec = np.array([force_item['force_x'], force_item['force_y'], force_item['force_z']])
+            pos = np.array([force_item['force_x_pstn'], force_item['force_y_pstn'], force_item['force_z_pstn']])
+            distances = np.linalg.norm(self.points[self.neumann_nodes] - pos, axis=1)
+            node_idx = self.neumann_nodes[np.argmin(distances)]
+            
+            self.f[3 * node_idx : 3 * node_idx + 3] += force_vec
+            print(f"     - Applied force {force_vec} N to node {node_idx}.")
+
+            # [NEW] 플로팅을 위해 적용된 힘의 정보 저장
+            self.applied_forces_info.append({
+                'node_idx': node_idx,
+                'pos': self.points[node_idx],
+                'force_vec': force_vec
+            })
         
         self.active_dofs = np.setdiff1d(np.arange(total_dof), self.fixed_dofs)
 
@@ -200,9 +214,13 @@ class ForceAnalysis:
             reactions = self.reaction_forces[3 * node_idx : 3 * node_idx + 3]
             total_reaction += reactions
             print(f"  Node {node_idx} (Fix Point {i+1}): Rx={reactions[0]:.4e}, Ry={reactions[1]:.4e}, Rz={reactions[2]:.4e} N")
+        
         print("\n--- Force Equilibrium Check ---")
-        applied_force = np.array([self.force_data['force_x'], self.force_data['force_y'], self.force_data['force_z']])
-        print(f"  Sum of Applied Forces (Fx, Fy, Fz): {applied_force}")
+        total_applied_force = np.zeros(3)
+        for force_item in self.force_data:
+            total_applied_force += [force_item['force_x'], force_item['force_y'], force_item['force_z']]
+        
+        print(f"  Sum of Applied Forces (Fx, Fy, Fz): {total_applied_force}")
         print(f"  Sum of Reaction Forces (Rx, Ry, Rz): {-total_reaction}")
 
     def run_simulation(self):
@@ -211,7 +229,7 @@ class ForceAnalysis:
         self.apply_boundary_conditions()
         self.solve()
         self.print_reactions()
-        self.generate_report() # [MODIFIED] 해석 완료 후 리포트 자동 생성
+        self.generate_report()
 
     def plot(self, factor=1.0, show_window=True, filename="fem_result.png"):
         """PyVista를 사용하여 변위 결과를 시각화하거나 파일로 저장합니다."""
@@ -234,19 +252,39 @@ class ForceAnalysis:
         plotter.add_axes()
         plotter.add_text(f"Deformed Shape (Magnitude) | Warp Factor: {factor}x", font_size=15)
         plotter.add_mesh(warped, scalars='Magnitude', cmap='jet', show_edges=True)
-        fixed_node_indices = np.unique(self.fixed_dofs // self.pd)
-        plotter.add_points(self.points[fixed_node_indices], color='blue', point_size=10, render_points_as_spheres=True, label='Fixed Nodes')
+        
+        # --- [MODIFIED] 고정점, 하중점 및 라벨 플로팅 로직 개선 ---
+        
+        # 1. 고정점(파란색) 및 반력 라벨 표시
+        fixed_node_indices = [info['node_idx'] for info in self.fixed_nodes_info]
+        plotter.add_points(self.points[fixed_node_indices], color='blue', point_size=10, 
+                           render_points_as_spheres=True, label='Fixed Nodes')
+
+        bounds = grid.bounds
+        diag_length = np.sqrt(np.sum((np.array(bounds[1::2]) - np.array(bounds[::2]))**2))
+        label_offset = diag_length * 0.03 if diag_length > 1e-6 else 0.03
 
         if self.reaction_forces is not None:
-            bounds = grid.bounds
-            diag_length = np.sqrt(np.sum((np.array(bounds[1::2]) - np.array(bounds[::2]))**2))
-            label_offset = diag_length * 0.05 if diag_length > 1e-6 else 0.05
-            for info in self.fixed_nodes_info:
-                pos = info['pos'].copy(); pos[1] += label_offset
+            for i, info in enumerate(self.fixed_nodes_info):
+                pos = info['pos'].copy()
+                pos[1] += label_offset # 라벨을 점 위로 이동
                 reactions = self.reaction_forces[3 * info['node_idx'] : 3 * info['node_idx'] + 3]
-                label = f"Rx:{np.nan_to_num(reactions[0]):.2e}\nRy:{np.nan_to_num(reactions[1]):.2e}\nRz:{np.nan_to_num(reactions[2]):.2e}"
-                plotter.add_point_labels(pos, [label], font_size=10, always_visible=True)
-        
+                label = f"Fix Point {i+1}\nRx:{np.nan_to_num(reactions[0]):.2e}\nRy:{np.nan_to_num(reactions[1]):.2e}\nRz:{np.nan_to_num(reactions[2]):.2e}"
+                plotter.add_point_labels(pos, [label], font_size=13, always_visible=True, text_color='black')
+
+        # 2. [NEW] 하중점(빨간색) 및 하중 라벨 표시
+        if self.applied_forces_info:
+            applied_node_indices = [info['node_idx'] for info in self.applied_forces_info]
+            plotter.add_points(self.points[applied_node_indices], color='red', point_size=10,
+                               render_points_as_spheres=True, label='Applied Force Nodes')
+            
+            for i, info in enumerate(self.applied_forces_info):
+                pos = info['pos'].copy()
+                pos[1] -= label_offset # 라벨을 점 아래로 이동
+                force = info['force_vec']
+                label = f"Applied Force {i+1}\nFx:{force[0]:.2e}\nFy:{force[1]:.2e}\nFz:{force[2]:.2e}"
+                plotter.add_point_labels(pos, [label], font_size=13, always_visible=True, text_color='black')
+
         plotter.add_legend()
         if show_window:
             plotter.show()
@@ -279,7 +317,7 @@ class ReportGenerator:
         self.doc.add_heading('Finite Element Analysis Report', 0)
 
         self._add_results_image()
-        self._add_analysis_parameters() # [MODIFIED] 해석 파라미터 섹션 추가
+        self._add_analysis_parameters()
         self._add_mesh_info()
         self._add_boundary_conditions()
         self._add_mesh_quality()
@@ -328,11 +366,16 @@ class ReportGenerator:
         self.doc.add_heading('Boundary Conditions', level=1)
         
         self.doc.add_heading('Applied Loads', level=2)
-        force_info = self.analysis.force_data
-        force_vec = (force_info['force_x'], force_info['force_y'], force_info['force_z'])
-        force_pos = (force_info['force_x_pstn'], force_info['force_y_pstn'], force_info['force_z_pstn'])
-        self.doc.add_paragraph(f" - Force Vector (Fx, Fy, Fz): {force_vec} N")
-        self.doc.add_paragraph(f" - Application Point (x, y, z): {force_pos} m")
+        if not self.analysis.force_data:
+            self.doc.add_paragraph(" - No loads applied.")
+        else:
+            for i, force_info in enumerate(self.analysis.force_data):
+                force_vec = (force_info['force_x'], force_info['force_y'], force_info['force_z'])
+                force_pos = (force_info['force_x_pstn'], force_info['force_y_pstn'], force_info['force_z_pstn'])
+                p = self.doc.add_paragraph()
+                p.add_run(f" - Load {i+1}:").bold = True
+                p.add_run(f"\n   Force Vector (Fx, Fy, Fz): {force_vec} N")
+                p.add_run(f"\n   Application Point (x, y, z): {force_pos} m")
 
         self.doc.add_heading('Fixed Supports (Constraints)', level=2)
         for i, fix in enumerate(self.analysis.fix_data):
@@ -386,4 +429,3 @@ class ReportGenerator:
         row_cells[4].text = f"{total_reaction[2]:.4e}"
         
         self.doc.add_paragraph("\nNote: For static equilibrium, the 'Total Reaction' should be equal and opposite to the sum of applied forces.")
-
