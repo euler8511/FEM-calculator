@@ -11,7 +11,8 @@ from ReactionSolver import ForceAnalysis
 import tkinter as tk
 from tkinter import filedialog
 import meshio
-import numpy as np
+from BeamSolver import BeamAnalysisWindow
+
 
 # --- UI File Loading ---
 # 스크립트와 동일한 디렉토리에 .ui 파일이 있는지 확인합니다.
@@ -20,13 +21,13 @@ try:
     Ui_Dialog1, QtBaseClass1 = uic.loadUiType('reaction_force.ui')
     Ui_Dialog2, QtBaseClass2 = uic.loadUiType('Beam_analysis.ui')
     Ui_Dialog3, QtBaseClass3 = uic.loadUiType('modal.ui')
+    
 except FileNotFoundError as e:
     # 필수 UI 파일이 없을 경우, 사용자에게 알리고 프로그램을 종료합니다.
     # 이 부분은 GUI가 시작되기 전이므로 QMessageBox 대신 print를 사용합니다.
     print(f"Error: Could not find a required UI file: {e.filename}")
     print("Please make sure FEM_calc.ui, reaction_force.ui, static.ui, and modal.ui are present.")
     sys.exit(1)
-
 
 # --- 데이터 입력을 위한 대화상자 클래스 ---
 
@@ -406,46 +407,7 @@ class CustomDialog(QDialog):
         layout.addWidget(label)
         self.setLayout(layout)
         
-        
-class BeamAnalysisWindow(QDialog, Ui_Dialog2):
-    """'Static Analysis' 창 (플레이스홀더)."""
-    def __init__(self):
-        super().__init__()
-        self.setupUi(self)
-        
-        self.list_model = QStringListModel()
-        self.listView.setModel(self.list_model)
-        
-        self.mesh_sel_btn.clicked.connect(self.mesh_load)
-
-
-    def mesh_load(self):
-        # ========== [1] 파일 로드 ==========
-        root = tk.Tk()
-        root.withdraw()
-        mesh_path = filedialog.askopenfilename(
-            title="Select Gmsh .msh file",
-            filetypes=[("Gmsh mesh", "*.msh")]
-        )
-        if not mesh_path:
-            raise FileNotFoundError("No .msh file selected.")
-
-        self.mesh = meshio.read(mesh_path)
-        self.points = self.mesh.points[:, :2]
-        # ========== [2] Physical group명 추출 ==========      
-        if self.mesh.field_data:
-            # 딕셔너리의 키들을 리스트로 변환하여 반환합니다.
-            physical_group_names = list(self.mesh.field_data.keys())
-            print(physical_group_names)
-        else:
-            print("Physical Group을 찾을 수 없습니다.")
-        
-        # ========== [2] Beam 요소 및 물성 설정 ==========
-        self.beam_cells = np.vstack([c.data for c in self.mesh.cells if c.type in ["line", "line2"]])
-        if not len(self.beam_cells):
-            raise ValueError("No beam elements found.")
-        
-        
+                
         
 class ShaftAnalysisWindow(QDialog, Ui_Dialog3):
     """'Modal Analysis' 창 (플레이스홀더)."""
