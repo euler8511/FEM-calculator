@@ -1,0 +1,11 @@
+<RCC>
+  <qresource prefix="/">
+    <file>C_section.JPG</file>
+    <file>circular_section.JPG</file>
+    <file>hollow_box_section.JPG</file>
+    <file>hollow_circular_section.JPG</file>
+    <file>I_section.JPG</file>
+    <file>L section.JPG</file>
+    <file>Rectangular_section.JPG</file>
+  </qresource>
+</RCC>
